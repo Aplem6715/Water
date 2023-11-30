@@ -11,6 +11,6 @@ namespace SPH.ECS
     [BurstCompile]
     public partial struct Velocity: IComponentData
     {
-        double2 Value;
+        public double2 Value;
     }
 }
