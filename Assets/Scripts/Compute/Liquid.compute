@@ -1,0 +1,216 @@
+#pragma kernel SpawnParticle
+#pragma kernel UpdatePressure
+#pragma kernel UpdateParticle
+#pragma kernel RenderParticle
+#pragma kernel ClearLiquidTex
+
+struct Particle
+{
+    float2 pos;
+    float2 v;
+    float2 accel;
+    float density;
+    float pressure;
+};
+
+RWStructuredBuffer<Particle> _Particles;
+RWTexture2D<float4> _LiquidTex;
+
+int _numParticles;
+int _numParticleX;
+int _numParticleY;
+float _dt;
+// float4 _spawnPos;
+
+static const uint TexSize = 256;
+
+static const float _SpaceH = 0.01f; // 影響半径
+static const float _SqrSpaceH = _SpaceH * _SpaceH;
+
+static const float _PressureK = 100.0f; // stiffness 圧力係数
+static const float _RestDensiety = 1000.0f; // density0 基本密度 
+static const float _StickyK = 1.0f; // viscosity 粘性係数 
+static const float _Mass = _SpaceH * _SpaceH * _RestDensiety; // 粒子質量
+static const float _WallK = 10000.0f;
+static const float _WallDamp = 256.0f;
+static const float _SpeedLimit = 1000.0f;
+
+static const float2 _Gravity = float2(0, -9.8f);
+
+static const float _EPSILON = 1.192092896e-07;
+
+static const float PI = 3.14159265f;
+
+static const float4 LiquidColor = float4(0, 50, 200, 1);
+
+#define DensityTermCoeff 4.0f / (PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH)
+#define PressureTermCoeff -30.0f / (PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH)
+#define StickyTermCoeff 20.0f / (3.0f * PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH)
+
+[numthreads(1, 1, 1)]
+void SpawnParticle()
+{
+    // Particle newParticle = _Particles[_numParticles-1];
+    // newParticle.pos = _spawnPos.xy / TexSize;
+    // newParticle.v = float2(0, 0);
+    // _Particles[_numParticles-1] = newParticle;
+
+    for (int y = 0; y < _numParticleY; y++)
+    {
+        for (int x = 0; x < _numParticleX; x++)
+        {
+            Particle newP = _Particles[x + y * _numParticleX];
+            newP.pos = float2(x, y) * _SpaceH + float2(0.2f, 0.1f);
+            _Particles[x + y * _numParticleX] = newP;
+        }
+    }
+}
+
+// Poly6 Kernel
+inline float DensityW(float sqrDist)
+{
+    float q = _SqrSpaceH - sqrDist/*== r^2*/;
+    return q * q * q;
+}
+
+[numthreads(64, 1, 1)]
+void UpdatePressure(uint index : SV_DispatchThreadID)
+{
+    if (index >= _numParticles) return;
+
+    float2 selfPos = _Particles[index].pos;
+
+    float sum = 0;
+    for (uint i = 0; i < _numParticles; i++)
+    {
+        // 圧力計算では自分も含む
+        // if (i == index) continue;
+        float2 gap = _Particles[i].pos - selfPos;
+        float sqrDist = dot(gap, gap);
+        if (sqrDist < _SqrSpaceH)
+        {
+            sum += _Mass * DensityTermCoeff * DensityW(sqrDist);
+        }
+    }
+
+    _Particles[index].density = sum;
+    _Particles[index].pressure = max(_PressureK * (_Particles[index].density - _RestDensiety), 0);
+}
+
+
+inline float2 PressureW(float r, float2 gap)
+{
+    // r = (r==0) ? 0.000001 : r; // ゼロ除算回避
+    float q = _SpaceH - r;
+    return q * q * gap / r;
+}
+
+inline float StickyW(float r)
+{
+    return (_SpaceH - r);
+}
+
+[numthreads(64, 1, 1)]
+void UpdateParticle(uint index : SV_DispatchThreadID)
+{
+    if (index >= _numParticles) return;
+
+    Particle p = _Particles[index];
+
+    float2 pressSum = 0;
+    float2 stickySum = 0;
+    for (uint i = 0; i < _numParticles; i++)
+    {
+        if (i == index) continue;
+        Particle nearP = _Particles[i];
+        float2 gap = nearP.pos - p.pos;
+
+        float r_sqr = dot(gap, gap);
+        if (r_sqr < _SqrSpaceH)
+        {
+            float r = sqrt(r_sqr);
+            // massが粒子ごとに異なる場合はここで*mass
+            pressSum += _Mass * (nearP.pressure - p.pressure) / nearP.density * PressureW(r, gap);
+            stickySum += _Mass * (nearP.v - p.v) / nearP.density * StickyW(r);
+        }
+    }
+
+    // massが粒子ごとに異なる場合は↑で*mass
+    float2 pressureTerm = pressSum * PressureTermCoeff / 2;
+    // float2 pressureTerm = _Mass * PressureTermCoeff / (2 * density);
+    float2 stickyTerm = _StickyK * stickySum * StickyTermCoeff;
+
+    float2 accel = (pressureTerm + stickyTerm) / p.density + _Gravity;
+
+    // 速度制限
+    float speed = dot(accel, accel);
+    if (speed > _SpeedLimit * _SpeedLimit)
+    {
+        accel *= _SpeedLimit / sqrt(speed);
+    }
+
+    // Down Wall
+    float over = _SpaceH + (0.1f - p.pos.y);
+    if (over > _EPSILON)
+    {
+        accel += float2(0.0f, 1.0f) * (over * _WallK - p.v.y * _WallDamp);
+    }
+    else
+    {
+        // Up Wall
+        over = _SpaceH + (p.pos.y - 0.9f);
+        if (over > _EPSILON)
+        {
+            accel += float2(0.0f, -1.0f) * (over * _WallK + p.v.y * _WallDamp);
+        }
+    }
+    // Left Wall
+    over = _SpaceH + (0.1f - p.pos.x);
+    if (over > _EPSILON)
+    {
+        accel += float2(1.0f, 0.0f) * (over * _WallK - p.v.x * _WallDamp);
+    }
+    else
+    {
+        // Right Wall
+        over = _SpaceH + (p.pos.x - 0.9f);
+        if (over > _EPSILON)
+        {
+            accel += float2(-1.0f, 0.0f) * (over * _WallK + p.v.x * _WallDamp);
+        }
+    }
+
+    // リープ・フロッグ法
+    p.pos += p.v * _dt + 0.5f * accel * _dt * _dt;
+    p.v += 0.5f * (p.accel + accel) * _dt;
+    p.accel = accel;
+
+    _Particles[index] = p;
+}
+
+[numthreads(64, 1, 1)]
+void RenderParticle(uint index : SV_DispatchThreadID)
+{
+    if (index >= _numParticles) return;
+
+    Particle p = _Particles[index];
+
+    uint2 px = uint2(p.pos * TexSize);
+    if (px.x >= 0 && px.x <= TexSize && px.y >= 0 && px.y <= TexSize)
+    {
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                _LiquidTex[px + int2(x, y)] = float4(p.density / _RestDensiety, 0, 0, 1.0f);
+            }
+        }
+    }
+}
+
+
+[numthreads(8, 8, 1)]
+void ClearLiquidTex(uint2 id : SV_DispatchThreadID)
+{
+    _LiquidTex[id] = float4(0, 0, 0, 0);
+}
