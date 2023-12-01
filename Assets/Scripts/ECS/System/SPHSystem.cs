@@ -13,7 +13,7 @@ namespace SPH.ECS
     [BurstCompile]
     public partial struct SPHSystem : ISystem
     {
-        public const double DeltaTime = 0.025;
+        public const double DeltaTime = 0.001;
         public const double ParticleSize = 0.01;
         public const double ForceRangeH = ParticleSize * 1.5;
         public const double SqrRangeH = ForceRangeH * ForceRangeH;
@@ -94,7 +94,7 @@ namespace SPH.ECS
 
             handle = new MoveJob()
             {
-                Dt = DeltaTime * state.WorldUnmanaged.Time.DeltaTime
+                Dt = DeltaTime
             }.ScheduleParallel(_withoutWallsQuery, handle);
 
             state.Dependency = handle;
