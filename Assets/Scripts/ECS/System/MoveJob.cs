@@ -9,6 +9,7 @@ using Unity.Transforms;
 namespace SPH.ECS
 {
     [BurstCompile]
+    [WithNone(typeof(Static))]
     public partial struct MoveJob : IJobEntity
     {
         [ReadOnly] public double Dt;

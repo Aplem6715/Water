@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Entities;
+using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Transforms;
 using UnityEngine;
@@ -13,7 +14,8 @@ namespace SPH.ECS
     [BurstCompile]
     public partial struct SPHSystem : ISystem
     {
-        public const double DeltaTime = 0.001;
+        public const int NumStep = 5;
+        public const double DeltaTime = 0.0005;
         public const double ParticleSize = 0.01;
         public const double ForceRangeH = ParticleSize * 1.5;
         public const double SqrRangeH = ForceRangeH * ForceRangeH;
@@ -32,22 +34,11 @@ namespace SPH.ECS
         public ComponentLookup<Velocity> _velocityLookup;
         public ComponentLookup<Particle> _particleLookup;
 
-        private EntityQuery _withoutWallsQuery;
-
         public void OnCreate(ref SystemState state)
         {
             state.RequireForUpdate<Particle>();
 
-            _withoutWallsQuery = new EntityQueryBuilder(Allocator.Persistent)
-                .WithAllRW<Particle>()
-                .WithAllRW<Velocity>()
-                .WithAllRW<LeapFrog>()
-                .WithAllRW<LocalTransform>()
-                .WithAllRW<Force>()
-                .WithNone<Static>()
-                .Build(ref state);
-
-            _gridMap = new NativeParallelMultiHashMap<int2, Entity>(256*256, Allocator.Persistent);
+            _gridMap = new NativeParallelMultiHashMap<int2, Entity>(256 * 256, Allocator.Persistent);
             _transformLookup = state.GetComponentLookup<LocalTransform>();
             _velocityLookup = state.GetComponentLookup<Velocity>();
             _particleLookup = state.GetComponentLookup<Particle>();
@@ -58,8 +49,26 @@ namespace SPH.ECS
             _transformLookup.Update(ref state);
             _velocityLookup.Update(ref state);
             _particleLookup.Update(ref state);
-            _gridMap.Clear();
 
+            int i = 0;
+            while (true)
+            {
+                _gridMap.Clear();
+                state.Dependency = Step(ref state);
+                if (i != NumStep)
+                {
+                    state.Dependency.Complete();
+                    i++;
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+
+        public JobHandle Step(ref SystemState state)
+        {
             var handle = new PartitioningJob()
             {
                 Grid = _gridMap.AsParallelWriter(),
@@ -90,14 +99,14 @@ namespace SPH.ECS
                 _transformLookup = _transformLookup,
                 _velocityLookup = _velocityLookup,
                 _particleLookup = _particleLookup
-            }.ScheduleParallel(_withoutWallsQuery, handle);
+            }.ScheduleParallel(handle);
 
             handle = new MoveJob()
             {
                 Dt = DeltaTime
-            }.ScheduleParallel(_withoutWallsQuery, handle);
+            }.ScheduleParallel(handle);
 
-            state.Dependency = handle;
+            return handle;
         }
 
         public void OnDestroy(ref SystemState state)
