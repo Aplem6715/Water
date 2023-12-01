@@ -11,6 +11,6 @@ namespace SPH.ECS
     [BurstCompile]
     public partial struct LeapFrog: IComponentData
     {
-        double2 DelayVelocity;
+        public double2 DelayVelocity;
     }
 }

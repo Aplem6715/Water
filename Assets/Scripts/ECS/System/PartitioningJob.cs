@@ -11,12 +11,12 @@ namespace SPH.ECS
     [BurstCompile]
     public partial struct PartitioningJob : IJobEntity
     {
-        [WriteOnly] public NativeParallelMultiHashMap<int2, Entity>.ParallelWriter _grid;
-        [ReadOnly] public float H;
+        [WriteOnly] public NativeParallelMultiHashMap<int2, Entity>.ParallelWriter Grid;
+        [ReadOnly] public double RangeH;
 
         public void Execute(Entity entity, in LocalTransform transform)
         {
-            _grid.Add(new int2(transform.Position.xy / H), entity);
+            Grid.Add((int2)((double2)transform.Position.xy / RangeH), entity);
         }
     }
 }
