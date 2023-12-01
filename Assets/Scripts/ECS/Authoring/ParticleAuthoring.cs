@@ -10,7 +10,7 @@ namespace SPH.ECS
 
     public class ParticleAuthoring : MonoBehaviour
     {
-        private class WallBaker : Baker<ParticleAuthoring>
+        private class ParticleBaker : Baker<ParticleAuthoring>
         {
             public override void Bake(ParticleAuthoring authoring)
             {

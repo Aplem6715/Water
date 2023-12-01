@@ -49,11 +49,13 @@ namespace SPH.ECS
                     while (_grid.TryGetNextValue(out pNearEntity, ref iter))
                     {
                         pNearPos = (double2)_transformLookup[pNearEntity].Position.xy;
-                        rSqr = math.distancesq(pNearPos, pPos);
-                        if (rSqr >= RangeSqrH) continue;
 
-                        d = Poly6(rSqr) * Mass;
-                        density += d;
+                        rSqr = math.distancesq(pNearPos, pPos);
+                        if (rSqr < RangeSqrH)
+                        {
+                            d = Poly6(rSqr) * Mass;
+                            density += d;
+                        }
                     }
                 }
             }
@@ -64,12 +66,8 @@ namespace SPH.ECS
 
         public double Poly6(double rSqr)
         {
-            if (rSqr < RangeSqrH)
-            {
-                double sqrDiff = RangeSqrH - rSqr;
-                return Poly6Alpha * (sqrDiff * sqrDiff * sqrDiff);
-            }
-            return 0;
+            double sqrDiff = RangeSqrH - rSqr;
+            return Poly6Alpha * (sqrDiff * sqrDiff * sqrDiff);
         }
     }
 }

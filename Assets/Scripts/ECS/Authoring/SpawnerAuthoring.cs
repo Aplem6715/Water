@@ -26,7 +26,7 @@ namespace SPH.ECS
                     ParticlePrefab = GetEntity(authoring._prefab, TransformUsageFlags.Dynamic),
                     WallPrefab = GetEntity(authoring._wallPrefab, TransformUsageFlags.Renderable),
                     NumParticles = authoring._numParticles,
-                    FieldSize = authoring._numParticles,
+                    FieldSize = authoring._fieldSize,
                     WallThickness = authoring._wallThickness
                 });
             }

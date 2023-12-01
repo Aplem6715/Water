@@ -13,7 +13,7 @@ namespace SPH.ECS
     [BurstCompile]
     public partial struct SPHSystem : ISystem
     {
-        public const double DeltaTime = 0.001;
+        public const double DeltaTime = 0.025;
         public const double ParticleSize = 0.01;
         public const double ForceRangeH = ParticleSize * 1.5;
         public const double SqrRangeH = ForceRangeH * ForceRangeH;
@@ -32,13 +32,13 @@ namespace SPH.ECS
         public ComponentLookup<Velocity> _velocityLookup;
         public ComponentLookup<Particle> _particleLookup;
 
-        private EntityQuery _dynamicParticlesQuery;
+        private EntityQuery _withoutWallsQuery;
 
         public void OnCreate(ref SystemState state)
         {
             state.RequireForUpdate<Particle>();
 
-            _dynamicParticlesQuery = new EntityQueryBuilder(Allocator.Persistent)
+            _withoutWallsQuery = new EntityQueryBuilder(Allocator.Persistent)
                 .WithAllRW<Particle>()
                 .WithAllRW<Velocity>()
                 .WithAllRW<LeapFrog>()
@@ -85,16 +85,17 @@ namespace SPH.ECS
                 Poly6Alpha = Poly6Alpha,
                 Mass = Mass,
                 Viscosity = Viscosity,
+                Gravity = Gravity,
                 _grid = _gridMap.AsReadOnly(),
                 _transformLookup = _transformLookup,
                 _velocityLookup = _velocityLookup,
                 _particleLookup = _particleLookup
-            }.ScheduleParallel(_dynamicParticlesQuery, handle);
+            }.ScheduleParallel(_withoutWallsQuery, handle);
 
             handle = new MoveJob()
             {
-                Dt = SystemAPI.Time.DeltaTime
-            }.ScheduleParallel(_dynamicParticlesQuery, handle);
+                Dt = DeltaTime * state.WorldUnmanaged.Time.DeltaTime
+            }.ScheduleParallel(_withoutWallsQuery, handle);
 
             state.Dependency = handle;
         }
