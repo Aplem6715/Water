@@ -606,12 +606,13 @@ MonoBehaviour:
   _shader: {fileID: 7200000, guid: 3ea9898fea44c7647b96338a426eb654, type: 3}
   _liquidTex: {fileID: 8400000, guid: bd9f394e572b2d0469a6a5e567ef35ce, type: 2}
   NumParticles:
-    x: 10
-    y: 10
+    x: 50
+    y: 50
   FieldSize:
-    x: 40
-    y: 40
+    x: 100
+    y: 100
   WallThickness: 4
+  ParticleRenderSize: 3
 --- !u!4 &1734467121
 Transform:
   m_ObjectHideFlags: 0
