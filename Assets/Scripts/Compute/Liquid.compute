@@ -8,32 +8,36 @@ struct Particle
 {
     float2 pos;
     float2 v;
-    float2 accel;
+    float2 v2;
     float density;
     float pressure;
+    int isStatic;
+    int isActive;
 };
 
 RWStructuredBuffer<Particle> _Particles;
 RWTexture2D<float4> _LiquidTex;
 
-int _numParticles;
-int _numParticleX;
-int _numParticleY;
+uint _numParticles;
+uint _numParticleX;
+uint _numParticleY;
+uint _fieldWidth;
+uint _fieldHeight;
+uint _numParticleAndWall;
+uint _WallThickness;
+int _ParticleRenderSize;
 float _dt;
-// float4 _spawnPos;
 
-static const uint TexSize = 256;
+static const uint TexSize = 512;
 
-static const float _SpaceH = 0.01f; // 影響半径
+static const float _ParticleSize =  0.01f;
+static const float _SpaceH = _ParticleSize * 1.5f;; // 影響半径
 static const float _SqrSpaceH = _SpaceH * _SpaceH;
 
-static const float _PressureK = 100.0f; // stiffness 圧力係数
-static const float _RestDensiety = 1000.0f; // density0 基本密度 
-static const float _StickyK = 1.0f; // viscosity 粘性係数 
-static const float _Mass = _SpaceH * _SpaceH * _RestDensiety; // 粒子質量
-static const float _WallK = 10000.0f;
-static const float _WallDamp = 256.0f;
-static const float _SpeedLimit = 1000.0f;
+static const float _Stiffness = 100.0f; // Stiffness 圧力係数
+static const float _Density0 = 1000.0f; // density0 基本密度 
+static const float _Viscosity = 1.0f; // viscosity 粘性係数 
+static const float _Mass = _ParticleSize * _ParticleSize * _Density0; // 粒子質量
 
 static const float2 _Gravity = float2(0, -9.8f);
 
@@ -41,27 +45,79 @@ static const float _EPSILON = 1.192092896e-07;
 
 static const float PI = 3.14159265f;
 
-static const float4 LiquidColor = float4(0, 50, 200, 1);
+static const float4 LiquidColor = float4(0, 0, 200, 1);
 
-#define DensityTermCoeff 4.0f / (PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH)
-#define PressureTermCoeff -30.0f / (PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH)
-#define StickyTermCoeff 20.0f / (3.0f * PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH)
+#define Poly6Alpha (4.0f / (PI * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH * _SpaceH))
+
+Particle GetNewParticle(int idx)
+{
+    Particle newP = _Particles[idx];
+    newP.isStatic = 0;
+    newP.v = 0;
+    newP.v2 = 0;
+    newP.pressure = 0;
+    newP.density = 0;
+    newP.isActive = 1;
+    return newP;
+}
 
 [numthreads(1, 1, 1)]
 void SpawnParticle()
 {
-    // Particle newParticle = _Particles[_numParticles-1];
-    // newParticle.pos = _spawnPos.xy / TexSize;
-    // newParticle.v = float2(0, 0);
-    // _Particles[_numParticles-1] = newParticle;
+    uint width = _fieldWidth;
+    uint height = _fieldHeight;
+    uint x, y;
 
-    for (int y = 0; y < _numParticleY; y++)
+    for (y = 0; y < _numParticleY; y++)
     {
-        for (int x = 0; x < _numParticleX; x++)
+        for (x = 0; x < _numParticleX; x++)
         {
-            Particle newP = _Particles[x + y * _numParticleX];
-            newP.pos = float2(x, y) * _SpaceH + float2(0.2f, 0.1f);
+            Particle newP = GetNewParticle(x + y * _numParticleX);
+            newP.pos = float2(x + _WallThickness, y + _WallThickness) * _SpaceH;
             _Particles[x + y * _numParticleX] = newP;
+        }
+    }
+
+    // 左右の壁
+    int wallIndex = 0;
+    for (x = 0; x < _WallThickness; x++)
+    {
+        for(y = 0; y < height + _WallThickness; y++)
+        {
+            int wi = _numParticleX * _numParticleY + wallIndex;
+            Particle newP = GetNewParticle(wi);
+            newP.pos = float2(x, y) * _ParticleSize;
+            newP.isStatic = 1;
+            _Particles[wi] = newP;
+            wallIndex++;
+
+            wi = _numParticleX * _numParticleY + wallIndex;
+            newP = GetNewParticle(wi);
+            newP.pos = float2(x + width, y) * _ParticleSize;
+            newP.isStatic = 1;
+            _Particles[wi] = newP;
+            wallIndex++;
+        }
+    }
+
+    // 上下の壁
+    for (x = 0; x < width; x++)
+    {
+        for (y = 0; y < _WallThickness; y++)
+        {
+            int wi = _numParticleX * _numParticleY + wallIndex;
+            Particle newP = GetNewParticle(wi);
+            newP.pos = float2(x, y) * _ParticleSize;
+            newP.isStatic = 1;
+            _Particles[wi] = newP;
+            wallIndex++;
+
+            wi = _numParticleX * _numParticleY + wallIndex;
+            newP = GetNewParticle(wi);
+            newP.pos = float2(x, y + height) * _ParticleSize;
+            newP.isStatic = 1;
+            _Particles[wi] = newP;
+            wallIndex++;
         }
     }
 }
@@ -70,39 +126,42 @@ void SpawnParticle()
 inline float DensityW(float sqrDist)
 {
     float q = _SqrSpaceH - sqrDist/*== r^2*/;
-    return q * q * q;
+    return Poly6Alpha * q * q * q;
 }
 
 [numthreads(64, 1, 1)]
 void UpdatePressure(uint index : SV_DispatchThreadID)
 {
-    if (index >= _numParticles) return;
+    if (index >= _numParticleAndWall) return;
+    if (_Particles[index].isActive == 0) return;
 
     float2 selfPos = _Particles[index].pos;
 
     float sum = 0;
-    for (uint i = 0; i < _numParticles; i++)
+    for (uint i = 0; i < _numParticleAndWall; i++)
     {
+        if (_Particles[i].isActive == 0) continue;
+
         // 圧力計算では自分も含む
         // if (i == index) continue;
         float2 gap = _Particles[i].pos - selfPos;
         float sqrDist = dot(gap, gap);
         if (sqrDist < _SqrSpaceH)
         {
-            sum += _Mass * DensityTermCoeff * DensityW(sqrDist);
+            sum += _Mass * DensityW(sqrDist);
         }
     }
 
     _Particles[index].density = sum;
-    _Particles[index].pressure = max(_PressureK * (_Particles[index].density - _RestDensiety), 0);
+    _Particles[index].pressure = max(_Stiffness * (sum - _Density0), 0);
 }
 
 
-inline float2 PressureW(float r, float2 gap)
+inline float2 Ply6Grad(float rSqr, float2 gap)
 {
-    // r = (r==0) ? 0.000001 : r; // ゼロ除算回避
-    float q = _SpaceH - r;
-    return q * q * gap / r;
+    float q = _SqrSpaceH - rSqr;
+    float c = -6 * Poly6Alpha * q * q;
+    return c * gap;
 }
 
 inline float StickyW(float r)
@@ -117,73 +176,45 @@ void UpdateParticle(uint index : SV_DispatchThreadID)
 
     Particle p = _Particles[index];
 
-    float2 pressSum = 0;
-    float2 stickySum = 0;
-    for (uint i = 0; i < _numParticles; i++)
+    if(p.isActive == 0) return;
+    if(p.isStatic == 1) return;
+
+    float2 force = 0;
+    for (uint i = 0; i < _numParticleAndWall; i++)
     {
         if (i == index) continue;
         Particle nearP = _Particles[i];
-        float2 gap = nearP.pos - p.pos;
+        if(nearP.isActive == 0) continue;
+
+        float2 gap = p.pos - nearP.pos;
 
         float r_sqr = dot(gap, gap);
         if (r_sqr < _SqrSpaceH)
         {
-            float r = sqrt(r_sqr);
-            // massが粒子ごとに異なる場合はここで*mass
-            pressSum += _Mass * (nearP.pressure - p.pressure) / nearP.density * PressureW(r, gap);
-            stickySum += _Mass * (nearP.v - p.v) / nearP.density * StickyW(r);
+            float2 wp = Ply6Grad(r_sqr, gap);
+            float nearPress = nearP.pressure / (nearP.density * nearP.density);
+            float pPress = p.pressure / (p.density * p.density);
+            float fp = -_Mass * (nearPress + pPress);
+            force += wp * fp.xx;
+
+            float r2 = r_sqr + 0.01f + _SqrSpaceH;
+            float2 dv = p.v - nearP.v;
+            float fv = _Mass * 2 * _Viscosity / (nearP.density * p.density) * dot(gap, wp) / r2;
+            force += fv.xx * dv;
         }
     }
 
-    // massが粒子ごとに異なる場合は↑で*mass
-    float2 pressureTerm = pressSum * PressureTermCoeff / 2;
-    // float2 pressureTerm = _Mass * PressureTermCoeff / (2 * density);
-    float2 stickyTerm = _StickyK * stickySum * StickyTermCoeff;
-
-    float2 accel = (pressureTerm + stickyTerm) / p.density + _Gravity;
-
-    // 速度制限
-    float speed = dot(accel, accel);
-    if (speed > _SpeedLimit * _SpeedLimit)
-    {
-        accel *= _SpeedLimit / sqrt(speed);
-    }
-
-    // Down Wall
-    float over = _SpaceH + (0.1f - p.pos.y);
-    if (over > _EPSILON)
-    {
-        accel += float2(0.0f, 1.0f) * (over * _WallK - p.v.y * _WallDamp);
-    }
-    else
-    {
-        // Up Wall
-        over = _SpaceH + (p.pos.y - 0.9f);
-        if (over > _EPSILON)
-        {
-            accel += float2(0.0f, -1.0f) * (over * _WallK + p.v.y * _WallDamp);
-        }
-    }
-    // Left Wall
-    over = _SpaceH + (0.1f - p.pos.x);
-    if (over > _EPSILON)
-    {
-        accel += float2(1.0f, 0.0f) * (over * _WallK - p.v.x * _WallDamp);
-    }
-    else
-    {
-        // Right Wall
-        over = _SpaceH + (p.pos.x - 0.9f);
-        if (over > _EPSILON)
-        {
-            accel += float2(-1.0f, 0.0f) * (over * _WallK + p.v.x * _WallDamp);
-        }
-    }
+    force += _Gravity;
 
     // リープ・フロッグ法
-    p.pos += p.v * _dt + 0.5f * accel * _dt * _dt;
-    p.v += 0.5f * (p.accel + accel) * _dt;
-    p.accel = accel;
+    p.v2 += force * _dt;
+    p.pos += p.v2 * _dt;
+    p.v = p.v2 + 0.5 * force * _dt;
+
+    if(p.pos.x < -1 || p.pos.y < -1 || p.pos.x > (float)_fieldWidth+1 || p.pos.y > (float)_fieldHeight + 1)
+    {
+        p.isActive = 0;
+    }
 
     _Particles[index] = p;
 }
@@ -191,18 +222,33 @@ void UpdateParticle(uint index : SV_DispatchThreadID)
 [numthreads(64, 1, 1)]
 void RenderParticle(uint index : SV_DispatchThreadID)
 {
-    if (index >= _numParticles) return;
+    if (index >= _numParticleAndWall) return;
 
     Particle p = _Particles[index];
 
-    uint2 px = uint2(p.pos * TexSize);
-    if (px.x >= 0 && px.x <= TexSize && px.y >= 0 && px.y <= TexSize)
+    if(p.isActive == 0) return;
+
+    float renderScale = TexSize / ((max(_fieldWidth, _fieldHeight) + _WallThickness * 2) * _ParticleSize);
+    uint2 px = uint2(p.pos * renderScale);
+    // uint2 px = uint2(p.pos / _ParticleSize);
+    int r = _ParticleRenderSize;
+    for (int dx = -r; dx <= r; dx++)
     {
-        for (int x = -1; x <= 1; x++)
+        for (int dy = -r; dy <= r; dy++)
         {
-            for (int y = -1; y <= 1; y++)
+            uint2 index = px + int2(dx, dy);
+            // uint2 index = px;
+            if (index.x >= 0 && index.x <= TexSize && index.y >= 0 && index.y <= TexSize)
             {
-                _LiquidTex[px + int2(x, y)] = float4(p.density / _RestDensiety, 0, 0, 1.0f);
+                if(p.isStatic == 1)
+                {
+                    _LiquidTex[index] = float4(1, 1, 1, 1.0f);
+                } else {
+                    // float rg = (1 - p.density / _Density0) * 0.8;
+                    // float b = 1.0f;
+                    // _LiquidTex[index] = float4(rg, rg, b, 1.0f);
+                    _LiquidTex[index] = LiquidColor;
+                }
             }
         }
     }
